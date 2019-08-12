@@ -178,3 +178,102 @@ def get_delta_scores(record, ann, cov=1001):
                                 idx_nd-cov//2))
 
     return delta_scores
+
+def calculate_importance_score(X, models, t):
+
+    Y0 = np.asarray(models[0].predict(X))
+    Y1 = np.asarray(models[1].predict(X))
+    Y2 = np.asarray(models[2].predict(X))
+    Y3 = np.asarray(models[3].predict(X))
+    Y4 = np.asarray(models[4].predict(X))
+    Y = (Y0+Y1+Y2+Y3+Y4)/5
+
+    if len(Y.shape) == 3:
+        Y = Y[None, :]
+
+    WINDOW_SIZE = X.shape[-2]
+    L = Y.shape[-2]
+    N = 1001
+    I = np.zeros((N, X.shape[-3], L, 3))
+
+    for i in range(N):
+
+        Xa = np.copy(X).astype('float')
+        Xc = np.copy(X).astype('float')
+        Xg = np.copy(X).astype('float')
+        Xt = np.copy(X).astype('float')
+
+        Xa[:, (WINDOW_SIZE-N)//2+i] = np.asarray([1, 0, 0, 0])
+        Xc[:, (WINDOW_SIZE-N)//2+i] = np.asarray([0, 1, 0, 0])
+        Xg[:, (WINDOW_SIZE-N)//2+i] = np.asarray([0, 0, 1, 0])
+        Xt[:, (WINDOW_SIZE-N)//2+i] = np.asarray([0, 0, 0, 1])
+
+        I0 = np.asarray(models[0].predict(Xa))+np.asarray(models[0].predict(Xc))+np.asarray(models[0].predict(Xg))+np.asarray(models[0].predict(Xt))
+        I1 = np.asarray(models[1].predict(Xa))+np.asarray(models[1].predict(Xc))+np.asarray(models[1].predict(Xg))+np.asarray(models[1].predict(Xt))
+        I2 = np.asarray(models[2].predict(Xa))+np.asarray(models[2].predict(Xc))+np.asarray(models[2].predict(Xg))+np.asarray(models[2].predict(Xt))
+        I3 = np.asarray(models[3].predict(Xa))+np.asarray(models[3].predict(Xc))+np.asarray(models[3].predict(Xg))+np.asarray(models[3].predict(Xt))
+        I4 = np.asarray(models[4].predict(Xa))+np.asarray(models[4].predict(Xc))+np.asarray(models[4].predict(Xg))+np.asarray(models[4].predict(Xt))
+        Ii = (I0+I1+I2+I3+I4)/20
+
+        if len(Ii.shape) == 3:
+            Ii = Ii[None, :]
+
+        I[i] = Y[t] - Ii[t]
+
+    return I
+
+
+
+def get_importance_score(record, ann, cov=1001):
+
+    wid = 10000+cov
+    delta_scores = []
+
+    try:
+        record.chrom, record.pos, record.ref, len(record.alts)
+    except TypeError:
+        logging.warning('Skipping record (bad input): {}'.format(record))
+        return delta_scores
+
+    (genes, strands, idxs) = ann.get_name_and_strand(record.chrom, record.pos)
+    if len(idxs) == 0:
+        return delta_scores
+
+    chrom = normalise_chrom(record.chrom, list(ann.ref_fasta.keys())[0])
+    try:
+        seq = ann.ref_fasta[chrom][record.pos-wid//2-1:record.pos+wid//2].seq
+    except (IndexError, ValueError):
+        logging.warning('Skipping record (fasta issue): {}'.format(record))
+        return delta_scores
+
+    if seq[wid//2:wid//2+len(record.ref)].upper() != record.ref:
+        logging.warning('Skipping record (ref issue): {}'.format(record))
+        return delta_scores
+
+    for j in range(len(record.alts)):
+        for i in range(len(idxs)):
+
+            if record.alts[j] == '<NON_REF>' or record.alts[j] == '.':
+                continue
+
+            if len(record.ref) > 1 and len(record.alts[j]) > 1:
+                delta_scores.append("{}|{}|.|.|.|.|.|.|.|.".format(record.alts[j], genes[i]))
+                continue
+
+            dist = ann.get_pos_data(idxs[i], record.pos)
+            pad_size = [max(wid//2+dist[0], 0), max(wid//2-dist[1], 0)]
+            ref_len = len(record.ref)
+            alt_len = len(record.alts[j])
+            del_len = max(ref_len-alt_len, 0)
+
+            x_ref = 'N'*pad_size[0]+seq[pad_size[0]:wid-pad_size[1]]+'N'*pad_size[1]
+            x_alt = x_ref[:wid//2]+str(record.alts[j])+x_ref[wid//2+ref_len:]
+
+            x_ref = one_hot_encode(x_ref)[None, :]
+            x_alt = one_hot_encode(x_alt)[None, :]
+
+            if strands[i] == '-':
+                x_ref = x_ref[:, ::-1, ::-1]
+                x_alt = x_alt[:, ::-1, ::-1]
+
+    return calculate_importance_score(x_ref, ann.models, t)
