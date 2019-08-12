@@ -276,4 +276,4 @@ def get_importance_score(record, ann, cov=1001):
                 x_ref = x_ref[:, ::-1, ::-1]
                 x_alt = x_alt[:, ::-1, ::-1]
 
-    return calculate_importance_score(x_ref, ann.models, t)
+    return calculate_importance_score(x_alt, ann.models, t)
